@@ -1,0 +1,9 @@
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+httpx==0.28.1
+google-cloud-firestore==2.20.2
+google-cloud-tasks==2.19.2
+google-auth==2.40.1
+requests==2.32.3
+cryptography==44.0.3
+python-multipart==0.0.20
