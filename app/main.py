@@ -1,7 +1,8 @@
 """HTTP surface of the service.
 
 Public (no key):   GET /health, GET /auth/callback, HEAD|GET|POST /webhooks/withings/{secret}
-Personal API key:  GET /api/weight/latest, /api/weight/history, /api/body-composition/latest, /api/sync/status
+Personal API key:  GET /api/weight/latest, /api/weight/history, /api/body-composition/latest,
+                   /api/body-composition/history, /api/sync/status
 Admin key:         GET /auth/start, POST /admin/sync, POST /admin/subscribe
 Google OIDC:       POST /internal/sync  (Cloud Tasks / Cloud Scheduler)
 """
@@ -80,6 +81,24 @@ def _iso(value: datetime) -> str:
 
 def _weight_view(doc: dict) -> dict:
     return {"measured_at": _iso(doc["measured_at"]), "weight_kg": doc["value"], "source": doc.get("source", "withings")}
+
+
+def _weigh_ins(docs: list[dict], limit: int, composition_only: bool) -> list[dict]:
+    """Group per-type measurement docs into one entry per Withings weigh-in, oldest first."""
+    groups: dict[tuple, dict] = {}
+    for doc in docs:
+        key = (doc.get("account_id"), doc.get("withings_group_id"))
+        entry = groups.setdefault(
+            key,
+            {"measured_at": doc["measured_at"], "source": doc.get("source", "withings"), "metrics": {}},
+        )
+        name, unit = MEASURE_TYPES[doc["type"]]
+        entry["metrics"][name] = {"value": doc["value"], "unit": unit}
+    entries = sorted(groups.values(), key=lambda e: e["measured_at"], reverse=True)
+    if composition_only:
+        entries = [e for e in entries if set(e["metrics"]) - {"weight"}]
+    entries = entries[:limit]
+    return [{**e, "measured_at": _iso(e["measured_at"])} for e in reversed(entries)]
 
 
 def create_app(
@@ -265,6 +284,24 @@ def create_app(
                 name, unit = MEASURE_TYPES[mtype]
                 result[name] = {"value": doc["value"], "unit": unit, "measured_at": _iso(doc["measured_at"])}
         return {"source": "withings", "metrics": result}
+
+    @app.get("/api/body-composition/history", dependencies=[Depends(require_api_key)])
+    def body_composition_history(
+        from_: str | None = Query(default=None, alias="from"),
+        to: str | None = None,
+        limit: int = Query(default=1000, ge=1, le=MAX_HISTORY_LIMIT),
+        composition_only: bool = False,
+    ) -> dict:
+        start, end = _parse_instant(from_, "from"), _parse_instant(to, "to")
+        # Each type query returns at most `limit` newest docs in range, which always covers
+        # every type of the newest `limit` weigh-ins.
+        docs = [
+            doc
+            for mtype in (WEIGHT, *BODY_COMPOSITION_TYPES)
+            for doc in store.measurements_between(mtype, start, end, limit)
+        ]
+        items = _weigh_ins(docs, limit, composition_only)
+        return {"count": len(items), "items": items}
 
     @app.get("/api/sync/status", dependencies=[Depends(require_api_key)])
     def sync_status() -> dict:

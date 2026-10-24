@@ -12,6 +12,7 @@ from tests.conftest import (
     WEBHOOK_SECRET,
     ago,
     auth,
+    body_group,
     authorize,
     now,
     weight_group,
@@ -32,7 +33,14 @@ def run_internal_sync(client):
 
 
 @pytest.mark.parametrize(
-    "path", ["/api/weight/latest", "/api/weight/history", "/api/body-composition/latest", "/api/sync/status"]
+    "path",
+    [
+        "/api/weight/latest",
+        "/api/weight/history",
+        "/api/body-composition/latest",
+        "/api/body-composition/history",
+        "/api/sync/status",
+    ],
 )
 @pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer wrong"}, {"Authorization": "Basic x"}])
 def test_api_rejects_missing_or_invalid_key(client, path, headers):
@@ -241,3 +249,37 @@ def test_concurrent_refresh_waits_for_lock_holder(client, store, withings, setti
 def test_callback_probe_without_params_is_ok(client):
     assert client.get("/auth/callback").status_code == 200
     assert client.get("/auth/callback", params={"error": "access_denied"}).status_code == 400
+
+
+def test_body_composition_history_groups_metrics_per_weigh_in(client, fake, dispatcher):
+    authorize(client)
+    dispatcher.run = run_internal_sync(client)
+    fake.groups = [
+        body_group(1, ago(days=3), weight=83000, fat_ratio=24000, muscle=6010),
+        weight_group(2, ago(days=2), 82800),  # no body composition (e.g. socks on)
+        body_group(3, ago(days=1), weight=82561, fat_ratio=23425, muscle=6006),
+    ]
+    client.post("/admin/sync", headers=auth(ADMIN_KEY), json={"full": True})
+
+    body = client.get("/api/body-composition/history", headers=auth()).json()
+    assert body["count"] == 3
+    first, middle, last = body["items"]
+    assert first["metrics"] == {
+        "weight": {"value": 83.0, "unit": "kg"},
+        "fat_ratio": {"value": 24.0, "unit": "%"},
+        "muscle_mass": {"value": 60.1, "unit": "kg"},
+    }
+    assert middle["metrics"] == {"weight": {"value": 82.8, "unit": "kg"}}
+    assert last["metrics"]["fat_ratio"] == {"value": 23.425, "unit": "%"}
+    assert last["measured_at"].endswith("Z") and last["source"] == "withings"
+
+    only = client.get("/api/body-composition/history", params={"composition_only": "true"}, headers=auth()).json()
+    assert [i["metrics"]["weight"]["value"] for i in only["items"]] == [83.0, 82.561]
+
+    newest = client.get("/api/body-composition/history", params={"limit": 1}, headers=auth()).json()
+    assert newest["items"][0]["metrics"]["weight"]["value"] == 82.561
+
+    ranged = client.get(
+        "/api/body-composition/history", params={"from": ago(days=2, hours=12).isoformat()}, headers=auth()
+    ).json()
+    assert ranged["count"] == 2

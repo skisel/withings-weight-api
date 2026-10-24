@@ -57,6 +57,10 @@ body_contains "seeded value and UTC timestamp" '"measured_at":"2000-01-01T06:00:
 check "history bad date" 400 -H "Authorization: Bearer $API_KEY" "$URL/api/weight/history?from=garbage"
 check "latest weight" 200 -H "Authorization: Bearer $API_KEY" "$URL/api/weight/latest"
 check "body composition latest" 200 -H "Authorization: Bearer $API_KEY" "$URL/api/body-composition/latest"
+check "body composition history (seeded weigh-in)" 200 -H "Authorization: Bearer $API_KEY" \
+  "$URL/api/body-composition/history?from=1999-12-31&to=2000-01-02"
+body_contains "weigh-in grouped with metrics" '"metrics":{"weight":{"value":12.345,"unit":"kg"}}'
+check "body composition history without key" 401 "$URL/api/body-composition/history"
 GCLOUD_TOKEN="$(gcloud auth print-access-token)" "$PY" "$REPO_ROOT/scripts/integration_seed.py" clean "$PROJECT_ID"
 
 log "Async paths (Cloud Tasks + Cloud Scheduler -> /internal/sync with OIDC)"

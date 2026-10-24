@@ -25,6 +25,7 @@ All `/api/*` endpoints require `Authorization: Bearer <API_KEY>`.
 | `GET /api/weight/latest` | `{"measured_at":"2026-10-24T06:35:00Z","weight_kg":78.4,"source":"withings"}` |
 | `GET /api/weight/history?from=2026-01-01&to=2026-02-01&limit=1000` | `{"count":N,"items":[...]}`, oldest first; `from` inclusive, `to` exclusive, ISO 8601 (UTC if no offset) |
 | `GET /api/body-composition/latest` | Latest value per metric (weight, fat ratio, fat mass, fat free mass, muscle, hydration, bone) |
+| `GET /api/body-composition/history?from=&to=&limit=&composition_only=` | One entry per weigh-in, oldest first: `{"measured_at", "source", "metrics": {"weight": {"value","unit"}, "fat_ratio": {...}, ...}}`. Weigh-ins without body composition (e.g. not barefoot) contain only `weight`; `composition_only=true` skips them |
 | `GET /api/sync/status` | Sync / authorization / subscription status per account |
 
 ```bash

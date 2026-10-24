@@ -83,6 +83,15 @@ def weight_group(grpid: int, when: datetime, value: int = 78400, unit: int = -3)
     }
 
 
+def body_group(grpid: int, when: datetime, weight: int = 82561, fat_ratio: int = 23425, muscle: int = 6006) -> dict:
+    group = weight_group(grpid, when, weight)
+    group["measures"] += [
+        {"value": fat_ratio, "type": 6, "unit": -3},
+        {"value": muscle, "type": 76, "unit": -2},
+    ]
+    return group
+
+
 class RecordingDispatcher:
     def __init__(self):
         self.dispatched: list[tuple[str | None, bool]] = []
