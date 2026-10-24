@@ -107,7 +107,7 @@ def settings() -> Settings:
         public_base_url="https://svc.example",
         tasks_queue="",
         invoker_service_account=INVOKER,
-        firestore_database="(default)",
+        datastore_database="",
     )
 
 

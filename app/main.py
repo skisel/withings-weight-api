@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from app.config import Settings, get_settings
 from app.crypto import TokenCipher
 from app.logging_setup import configure_logging
-from app.store import FirestoreStore, Store
+from app.store import DatastoreStore, Store
 from app.sync import STATUS_REAUTH, ReauthorizationRequired, SyncService
 from app.tasks import SyncDispatcher
 from app.withings import BODY_COMPOSITION_TYPES, MEASURE_TYPES, WEIGHT, WithingsClient, WithingsError
@@ -92,7 +92,7 @@ def create_app(
     if settings is None:
         configure_logging()
         settings = get_settings()
-    store = store or FirestoreStore(database=settings.firestore_database)
+    store = store or DatastoreStore(database=settings.datastore_database)
     client = client or WithingsClient(settings.withings_client_id, settings.withings_client_secret)
     sync = SyncService(store, client, TokenCipher(settings.token_encryption_key))
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-time (idempotent) GCP bootstrap: APIs, Firestore, Artifact Registry, service accounts,
+# One-time (idempotent) GCP bootstrap: APIs, Datastore index/TTL, Artifact Registry, service accounts,
 # IAM, secrets, Cloud Tasks queue, optional budget. Safe to re-run.
 set -euo pipefail
 source "$(dirname "$0")/config.sh"
@@ -11,6 +11,7 @@ log "Enabling APIs"
 gcloud services enable \
   run.googleapis.com \
   firestore.googleapis.com \
+  datastore.googleapis.com \
   secretmanager.googleapis.com \
   cloudtasks.googleapis.com \
   cloudscheduler.googleapis.com \
@@ -35,18 +36,14 @@ gcloud artifacts repositories set-cleanup-policies "$AR_REPO" --location="$REGIO
   --policy="$CLEANUP_POLICY" --no-dry-run --quiet >/dev/null
 rm -f "$CLEANUP_POLICY"
 
-log "Firestore (Native mode, default database)"
+log "Datastore-mode database \"(default)\" (Firestore free tier applies to it)"
 if ! gcloud firestore databases describe --database='(default)' >/dev/null 2>&1; then
-  gcloud firestore databases create --database='(default)' --location="$REGION" --type=firestore-native
+  gcloud firestore databases create --database='(default)' --location="$REGION" --type=datastore-mode
 fi
-if ! out="$(gcloud firestore indexes composite create --collection-group=measurements \
-    --field-config=field-path=type,order=ascending \
-    --field-config=field-path=measured_at,order=descending --async 2>&1)"; then
-  grep -qi "already exists" <<<"$out" || { echo "$out" >&2; exit 1; }
-fi
-# Expired OAuth state documents are removed automatically.
-gcloud firestore fields ttls update expires_at --collection-group=oauth_states --enable-ttl --async --quiet \
-  >/dev/null 2>&1 || warn "Could not set TTL on oauth_states.expires_at (may already be set)"
+gcloud datastore indexes create "$REPO_ROOT/index.yaml" --quiet
+# Expired OAuth state entities are removed automatically.
+gcloud firestore fields ttls update expires_at --database='(default)' --collection-group=oauth_states \
+  --enable-ttl --async --quiet >/dev/null 2>&1 || warn "Could not set TTL on oauth_states.expires_at (may already be set)"
 
 log "Service accounts"
 for sa in "$RUN_SA_NAME" "$INVOKER_SA_NAME"; do

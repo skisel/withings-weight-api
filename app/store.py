@@ -1,9 +1,9 @@
-"""Persistence: Firestore in production, an in-memory twin for tests and local runs.
+"""Persistence: Firestore in Datastore mode in production, an in-memory twin for tests.
 
-Collections:
+Kinds:
   integrations/withings_<account_id>  tokens (encrypted), expiry, sync checkpoint/status, refresh lock
   measurements/<account>_<grpid>_<type>  one normalized value per Withings measure (idempotent upsert)
-  oauth_states/<state>                 short-lived OAuth state values (Firestore TTL on expires_at)
+  oauth_states/<state>                 short-lived OAuth state values (TTL policy on expires_at)
 """
 
 import threading
@@ -50,89 +50,90 @@ class Store(Protocol):
     ) -> list[dict]: ...
 
 
-class FirestoreStore:
-    def __init__(self, database: str = "(default)", project: str | None = None):
-        from google.cloud import firestore
+class DatastoreStore:
+    """Cloud Firestore in Datastore mode (the project's "(default)" database)."""
 
-        self._firestore = firestore
-        self._db = firestore.Client(project=project, database=database)
+    # Long or never-queried properties are kept out of indexes.
+    _UNINDEXED = ("encrypted_access_token", "encrypted_refresh_token", "scope")
+
+    def __init__(self, database: str = "", project: str | None = None):
+        from google.cloud import datastore
+
+        self._datastore = datastore
+        self._client = datastore.Client(project=project, database=database or None)
+
+    def _entity(self, kind: str, name: str, data: dict):
+        entity = self._datastore.Entity(
+            key=self._client.key(kind, name), exclude_from_indexes=self._UNINDEXED
+        )
+        entity.update(data)
+        return entity
+
+    def _integration_key(self, account_id: str):
+        return self._client.key(INTEGRATIONS, integration_id(account_id))
 
     def create_oauth_state(self, state: str, expires_at: datetime) -> None:
-        self._db.collection(OAUTH_STATES).document(state).set({"expires_at": expires_at})
+        self._client.put(self._entity(OAUTH_STATES, state, {"expires_at": expires_at}))
 
     def consume_oauth_state(self, state: str, now: datetime) -> bool:
-        ref = self._db.collection(OAUTH_STATES).document(state)
-
-        @self._firestore.transactional
-        def txn(transaction) -> bool:
-            snap = ref.get(transaction=transaction)
-            if not snap.exists:
+        key = self._client.key(OAUTH_STATES, state)
+        with self._client.transaction():
+            entity = self._client.get(key)
+            if entity is None:
                 return False
-            transaction.delete(ref)
-            return snap.get("expires_at") > now
-
-        return txn(self._db.transaction())
+            self._client.delete(key)
+        return entity["expires_at"] > now
 
     def get_integration(self, account_id: str) -> dict | None:
-        snap = self._db.collection(INTEGRATIONS).document(integration_id(account_id)).get()
-        return snap.to_dict() if snap.exists else None
+        entity = self._client.get(self._integration_key(account_id))
+        return dict(entity) if entity is not None else None
 
     def list_integrations(self) -> list[dict]:
-        return [s.to_dict() for s in self._db.collection(INTEGRATIONS).stream()]
+        return [dict(e) for e in self._client.query(kind=INTEGRATIONS).fetch()]
 
     def update_integration(self, account_id: str, fields: dict) -> None:
-        ref = self._db.collection(INTEGRATIONS).document(integration_id(account_id))
-        ref.set({"account_id": account_id, **fields}, merge=True)
+        key = self._integration_key(account_id)
+        with self._client.transaction():
+            entity = self._client.get(key) or self._entity(INTEGRATIONS, key.name, {})
+            entity.update({"account_id": account_id, **fields})
+            self._client.put(entity)
 
     def try_acquire_refresh_lock(self, account_id: str, now: datetime, until: datetime) -> bool:
-        ref = self._db.collection(INTEGRATIONS).document(integration_id(account_id))
-
-        @self._firestore.transactional
-        def txn(transaction) -> bool:
-            snap = ref.get(transaction=transaction)
-            if not snap.exists:
+        with self._client.transaction():
+            entity = self._client.get(self._integration_key(account_id))
+            if entity is None:
                 return False
-            lock = (snap.to_dict() or {}).get("refresh_lock_until")
+            lock = entity.get("refresh_lock_until")
             if lock is not None and lock > now:
                 return False
-            transaction.update(ref, {"refresh_lock_until": until})
+            entity["refresh_lock_until"] = until
+            self._client.put(entity)
             return True
 
-        return txn(self._db.transaction())
-
     def upsert_measurements(self, measurements: list[Measurement], imported_at: datetime) -> int:
-        collection = self._db.collection(MEASUREMENTS)
-        for start in range(0, len(measurements), 400):
-            batch = self._db.batch()
-            for m in measurements[start : start + 400]:
-                batch.set(collection.document(m.key), _measurement_doc(m, imported_at))
-            batch.commit()
-        return len(measurements)
-
-    def _type_query(self, mtype: int):
-        from google.cloud.firestore_v1.base_query import FieldFilter
-
-        return self._db.collection(MEASUREMENTS).where(filter=FieldFilter("type", "==", mtype))
+        entities = [self._entity(MEASUREMENTS, m.key, _measurement_doc(m, imported_at)) for m in measurements]
+        for start in range(0, len(entities), 400):
+            self._client.put_multi(entities[start : start + 400])
+        return len(entities)
 
     def latest_measurement(self, mtype: int) -> dict | None:
-        query = self._type_query(mtype).order_by(
-            "measured_at", direction=self._firestore.Query.DESCENDING
-        ).limit(1)
-        docs = [d.to_dict() for d in query.stream()]
+        docs = self.measurements_between(mtype, None, None, 1)
         return docs[0] if docs else None
 
     def measurements_between(
         self, mtype: int, start: datetime | None, end: datetime | None, limit: int
     ) -> list[dict]:
-        from google.cloud.firestore_v1.base_query import FieldFilter
+        from google.cloud.datastore.query import PropertyFilter
 
-        query = self._type_query(mtype)
+        # Served by the composite index in index.yaml (type ASC, measured_at DESC).
+        query = self._client.query(kind=MEASUREMENTS)
+        query.add_filter(filter=PropertyFilter("type", "=", mtype))
         if start is not None:
-            query = query.where(filter=FieldFilter("measured_at", ">=", start))
+            query.add_filter(filter=PropertyFilter("measured_at", ">=", start))
         if end is not None:
-            query = query.where(filter=FieldFilter("measured_at", "<", end))
-        query = query.order_by("measured_at", direction=self._firestore.Query.DESCENDING).limit(limit)
-        return [d.to_dict() for d in query.stream()]
+            query.add_filter(filter=PropertyFilter("measured_at", "<", end))
+        query.order = ["-measured_at"]
+        return [dict(e) for e in query.fetch(limit=limit)]
 
 
 class MemoryStore:

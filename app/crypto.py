@@ -1,4 +1,4 @@
-"""Application-layer encryption for OAuth tokens stored in Firestore."""
+"""Application-layer encryption for OAuth tokens stored in Datastore."""
 
 from cryptography.fernet import Fernet
 

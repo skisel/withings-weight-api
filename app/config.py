@@ -35,7 +35,8 @@ class Settings:
     tasks_queue: str
     # Service account whose OIDC tokens are accepted on /internal/* (Cloud Tasks, Scheduler).
     invoker_service_account: str
-    firestore_database: str
+    # Empty means the project's "(default)" database.
+    datastore_database: str
     withings_scope: str = "user.metrics"
 
     @property
@@ -59,5 +60,5 @@ def get_settings() -> Settings:
         public_base_url=_required("PUBLIC_BASE_URL").rstrip("/"),
         tasks_queue=os.environ.get("TASKS_QUEUE", "").strip(),
         invoker_service_account=os.environ.get("INVOKER_SERVICE_ACCOUNT", "").strip(),
-        firestore_database=os.environ.get("FIRESTORE_DATABASE", "(default)").strip(),
+        datastore_database=os.environ.get("DATASTORE_DATABASE", "").strip(),
     )

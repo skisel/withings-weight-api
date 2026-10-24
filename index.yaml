@@ -1,0 +1,7 @@
+# Datastore composite indexes. Deployed by scripts/setup.sh (gcloud datastore indexes create).
+indexes:
+  - kind: measurements
+    properties:
+      - name: type
+      - name: measured_at
+        direction: desc
