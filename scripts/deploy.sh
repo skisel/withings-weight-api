@@ -48,7 +48,6 @@ scheduler_args=(
   --time-zone="$SCHEDULER_TZ"
   --uri="${URL}/internal/sync"
   --http-method=POST
-  --headers="Content-Type=application/json"
   --message-body='{}'
   --oidc-service-account-email="$INVOKER_SA"
   --oidc-token-audience="$URL"
@@ -56,9 +55,11 @@ scheduler_args=(
   --quiet
 )
 if gcloud scheduler jobs describe "$SCHEDULER_JOB" --location="$REGION" >/dev/null 2>&1; then
-  gcloud scheduler jobs update http "$SCHEDULER_JOB" "${scheduler_args[@]}" >/dev/null
+  gcloud scheduler jobs update http "$SCHEDULER_JOB" "${scheduler_args[@]}" \
+    --update-headers="Content-Type=application/json" >/dev/null
 else
-  gcloud scheduler jobs create http "$SCHEDULER_JOB" "${scheduler_args[@]}" >/dev/null
+  gcloud scheduler jobs create http "$SCHEDULER_JOB" "${scheduler_args[@]}" \
+    --headers="Content-Type=application/json" >/dev/null
 fi
 
 log "Smoke test"
