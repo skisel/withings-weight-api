@@ -1,17 +1,18 @@
 # withings-integration
 
-Personal backend that syncs Withings weight / body-composition measurements into Firestore
+Personal backend that syncs Withings weight / body-composition measurements into the project's default
+Firestore-in-Datastore-mode database
 and exposes them through a small read-only JSON API protected by a static bearer token.
 
 Runs on Google Cloud (your own project, region `europe-west6`):
-Cloud Run (scale to zero) + Firestore + Secret Manager + Cloud Tasks + one Cloud Scheduler job.
+Cloud Run (scale to zero) + Firestore in Datastore mode (`(default)` database, free tier) + Secret Manager + Cloud Tasks + one Cloud Scheduler job.
 
 ```
 Withings ──notify──▶ /webhooks/withings/<secret> ──Cloud Tasks──▶ /internal/sync ──getmeas──▶ Withings
                                                                        │
 Cloud Scheduler (daily) ──────────────────────────────────────────────▶│ upsert
                                                                        ▼
-your scripts ──Bearer API key──▶ /api/weight/latest ◀──────────── Firestore
+your scripts ──Bearer API key──▶ /api/weight/latest ◀──────────── Datastore
 ```
 
 ## API
@@ -52,7 +53,7 @@ BILLING_ACCOUNT=XXXXXX-XXXXXX-XXXXXX   # optional: creates a 5 USD/month budget 
    ```bash
    scripts/setup.sh
    ```
-   Enables APIs, creates Firestore, Artifact Registry, service accounts, IAM, the Cloud Tasks queue,
+   Enables APIs, creates the Datastore index (`index.yaml`) and TTL policy, Artifact Registry, service accounts, IAM, the Cloud Tasks queue,
    and generates the token-encryption key, API key, admin key and webhook secret in Secret Manager.
    It prints the service URL and the OAuth callback URL.
 
@@ -92,6 +93,7 @@ Other helpers:
 
 | Script | Purpose |
 | --- | --- |
+| `scripts/integration-test.sh` | End-to-end checks against the deployed service (auth, Datastore, webhook, Cloud Tasks, Scheduler) |
 | `scripts/sync.sh [--full]` | Trigger a sync now (`--full` re-imports the entire history) |
 | `scripts/rotate-key.sh api\|admin [--finalize]` | Add a new key (old stays valid), then drop old keys |
 | `scripts/set-withings-credentials.sh` | Replace Withings client id/secret |
@@ -101,7 +103,7 @@ Other helpers:
 
 - **Tokens**: access/refresh tokens are Fernet-encrypted (key in Secret Manager) before being stored in
   `integrations/withings_<userid>`. Access tokens are refreshed 10 minutes before expiry under a
-  Firestore-transaction lock; the rotated refresh token is persisted immediately. A rejected refresh marks
+  Datastore-transaction lock; the rotated refresh token is persisted immediately. A rejected refresh marks
   the integration `reauthorization_required`.
 - **Webhook**: Withings notifications are only triggers. The handler checks the secret in the URL path and
   the known `userid`, enqueues a Cloud Task and returns 200 immediately (Cloud Run throttles CPU after the
@@ -116,6 +118,9 @@ Other helpers:
 
 ## Cost notes
 
+The project's `(default)` database is in Datastore mode (location `nam5`), and the Firestore free tier
+applies only to the `(default)` database, so data is stored there instead of in a separate Native database.
+
 Designed to stay inside free tiers at personal volume: Cloud Run min-instances 0 / max 2,
 6 secrets with a single active version each, Artifact Registry cleanup keeps 3 images, one scheduler job.
 Budget alerts are notifications only, not caps. Check current pricing before relying on $0.
@@ -129,8 +134,8 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 
 ## Known limitations / next steps
 
-- Measurements deleted in Withings are not deleted here (re-run a full sync after manual cleanup in Firestore).
+- Measurements deleted in Withings are not deleted here (re-run a full sync after manual cleanup in Datastore).
 - Cloud Run request logs include the webhook URL path (with its secret); logs stay inside the project.
 - No per-IP rate limiting beyond Cloud Run's max-instances bound.
-- Data deletion: remove the Firestore `measurements` / `integrations` collections and revoke the app in
+- Data deletion: remove the Datastore `measurements` / `integrations` kinds and revoke the app in
   your Withings account settings.
